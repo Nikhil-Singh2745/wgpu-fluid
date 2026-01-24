@@ -53,5 +53,39 @@ fn main() {
         .with_inner_size(LogicalSize::new(800.0, 800.0))
         .build(&event_loop)
         .unwrap();
-    //To do list : Implement fluid simulation logic 
+    
+    let instance = wgpu::Instance::default();
+    let surface = instance.create_surface(&window).unwrap();
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        force_fallback_adapter: false,
+        compatible_surface: Some(&surface),
+    }))
+    .expect("No adapter");
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: None,
+            features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+            limits: wgpu::Limits::default(),
+        },
+        None,
+    ))
+    .unwrap();
+
+    let surface_caps = surface.get_capabilities(&adapter);
+    let surface_format = surface_caps.formats[0];
+    let size = window.inner_size();
+    let mut config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: surface_format,
+        width: size.width.max(1),
+        height: size.height.max(1),
+        present_mode: wgpu::PresentMode::Fifo,
+        alpha_mode: surface_caps.alpha_modes[0],
+        view_formats: vec![surface_format],
+        desired_maximum_frame_latency: 2,
+    };
+    surface.configure(&device, &config);
+
+    //To do : Implement fluid simulation setup and event loop handling, similar to the previous example.
 }
