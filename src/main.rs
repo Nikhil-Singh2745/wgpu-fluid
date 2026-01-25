@@ -102,5 +102,15 @@ fn main() {
         mipmap_filter: wgpu::FilterMode::Nearest,
         ..Default::default()
     });
-    // To do : Continue implementing the fluid simulation setup and event loop
+    
+    let grid_size: u32 = 256;
+    let workgroup = ((grid_size + 7) / 8, (grid_size + 7) / 8);
+
+    let (vel_a, vel_a_view) = create_storage_tex(&device, grid_size);
+    let (vel_b, vel_b_view) = create_storage_tex(&device, grid_size);
+    let (dens_a, dens_a_view) = create_storage_tex(&device, grid_size);
+    let (dens_b, dens_b_view) = create_storage_tex(&device, grid_size);
+    let (press_a, press_a_view) = create_storage_tex(&device, grid_size);
+    let (press_b, press_b_view) = create_storage_tex(&device, grid_size);
+    let (_div, div_view) = create_storage_tex(&device, grid_size);    
 }
