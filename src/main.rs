@@ -112,5 +112,21 @@ fn main() {
     let (dens_b, dens_b_view) = create_storage_tex(&device, grid_size);
     let (press_a, press_a_view) = create_storage_tex(&device, grid_size);
     let (press_b, press_b_view) = create_storage_tex(&device, grid_size);
-    let (_div, div_view) = create_storage_tex(&device, grid_size);    
+    let (_div, div_view) = create_storage_tex(&device, grid_size);
+    
+    let params = SimParams {
+        grid_size,
+        mouse_down: 0,
+        jacobi_iterations: 40,
+        _pad0: 0,
+        dt: 0.1,
+        viscosity: 0.0005,
+        dissipation: 0.999,
+        add_strength: 30.0,
+        mouse_pos: [128.0, 128.0],
+        mouse_delta: [0.0, 0.0],
+        radius: 8.0,
+        _pad1: [0.0; 3],
+    };
+    //Might need to be COPY_DST | COPY_SRC
 }
