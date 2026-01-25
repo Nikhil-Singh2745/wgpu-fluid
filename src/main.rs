@@ -87,5 +87,20 @@ fn main() {
     };
     surface.configure(&device, &config);
 
-    //To do : Implement fluid simulation setup and event loop handling, similar to the previous example.
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("fluid"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("../fluid.wgsl").into()),
+    });
+
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("density_sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::FilterMode::Nearest,
+        ..Default::default()
+    });
+    // To do : Continue implementing the fluid simulation setup and event loop
 }
