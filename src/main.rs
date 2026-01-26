@@ -128,5 +128,24 @@ fn main() {
         radius: 8.0,
         _pad1: [0.0; 3],
     };
-    //Might need to be COPY_DST | COPY_SRC
+    let param_buffer = device.create_buffer_init(&wgpu::BufferInitDescriptor {
+        label: Some("params"),
+        contents: bytemuck::bytes_of(&params),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+
+    let compute_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("compute_bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(mem::size_of::<SimParams>() as _),
+                },
+                count: None,
+            },
+            //Need to add more entries here for other resources
 }
