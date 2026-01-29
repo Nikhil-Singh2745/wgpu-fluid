@@ -285,5 +285,48 @@ fn main() {
             },
         ],
     });
-    // Finished setup code for device, swap chain, textures, buffers, and bind groups.
+    let render_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("render_bg"),
+        layout: &render_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&dens_a_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+    });
+
+    let compute_pipeline_layout =
+        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("compute_pl"),
+            bind_group_layouts: &[&compute_layout],
+            push_constant_ranges: &[],
+        });
+
+    let render_pipeline_layout =
+        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render_pl"),
+            bind_group_layouts: &[&render_layout],
+            push_constant_ranges: &[],
+        });
+
+    let mk_compute = |name: &str| {
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(name),
+            layout: Some(&compute_pipeline_layout),
+            module: &shader,
+            entry_point: name,
+        })
+    };
+    let add_src_pipe = mk_compute("add_source");
+    let advect_vec_pipe = mk_compute("advect_vec");
+    let advect_scalar_pipe = mk_compute("advect_scalar");
+    let diffuse_vec_pipe = mk_compute("diffuse_vec");
+    let divergence_pipe = mk_compute("compute_divergence");
+    let pressure_pipe = mk_compute("pressure_jacobi");
+    let gradient_pipe = mk_compute("subtract_gradient");
 }
