@@ -329,4 +329,32 @@ fn main() {
     let divergence_pipe = mk_compute("compute_divergence");
     let pressure_pipe = mk_compute("pressure_jacobi");
     let gradient_pipe = mk_compute("subtract_gradient");
+
+    let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("render"),
+        layout: Some(&render_pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: "vs_fullscreen",
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: "fs_draw",
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+    });
+
+    let mut sim_params = params;
+    let mut last_mouse = None::<(f32, f32)>;
+
+    // Need to work on event loop
 }
