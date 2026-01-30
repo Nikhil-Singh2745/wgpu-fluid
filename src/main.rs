@@ -53,7 +53,7 @@ fn main() {
         .with_inner_size(LogicalSize::new(800.0, 800.0))
         .build(&event_loop)
         .unwrap();
-    
+
     let instance = wgpu::Instance::default();
     let surface = instance.create_surface(&window).unwrap();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -102,7 +102,7 @@ fn main() {
         mipmap_filter: wgpu::FilterMode::Nearest,
         ..Default::default()
     });
-    
+
     let grid_size: u32 = 256;
     let workgroup = ((grid_size + 7) / 8, (grid_size + 7) / 8);
 
@@ -113,7 +113,7 @@ fn main() {
     let (press_a, press_a_view) = create_storage_tex(&device, grid_size);
     let (press_b, press_b_view) = create_storage_tex(&device, grid_size);
     let (_div, div_view) = create_storage_tex(&device, grid_size);
-    
+
     let params = SimParams {
         grid_size,
         mouse_down: 0,
@@ -285,6 +285,7 @@ fn main() {
             },
         ],
     });
+
     let render_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("render_bg"),
         layout: &render_layout,
@@ -356,5 +357,109 @@ fn main() {
     let mut sim_params = params;
     let mut last_mouse = None::<(f32, f32)>;
 
-    // Need to work on event loop
+    event_loop
+        .run(move |event, target| {
+            match event {
+                Event::WindowEvent { event, .. } => match event {
+                    WindowEvent::CloseRequested => target.exit(),
+                    WindowEvent::Resized(new_size) => {
+                        if new_size.width > 0 && new_size.height > 0 {
+                            config.width = new_size.width;
+                            config.height = new_size.height;
+                            surface.configure(&device, &config);
+                        }
+                    }
+                    WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
+                        sim_params.mouse_down = if state == ElementState::Pressed { 1 } else { 0 };
+                        if state == ElementState::Released {
+                            last_mouse = None;
+                            sim_params.mouse_delta = [0.0, 0.0];
+                        }
+                    }
+                    WindowEvent::CursorMoved { position, .. } => {
+                        let px = position.x as f32;
+                        let py = position.y as f32;
+                        let current = (px / 3.0, py / 3.0);
+                        if let Some(prev) = last_mouse {
+                            sim_params.mouse_delta = [current.0 - prev.0, current.1 - prev.1];
+                        }
+                        sim_params.mouse_pos = [current.0, current.1];
+                        last_mouse = Some(current);
+                    }
+                    _ => {}
+                },
+                Event::MainEventsCleared => {
+                    queue.write_buffer(&param_buffer, 0, bytemuck::bytes_of(&sim_params));
+
+                    let frame = match surface.get_current_texture() {
+                        Ok(f) => f,
+                        Err(_) => {
+                            surface.configure(&device, &config);
+                            return;
+                        }
+                    };
+                    let view = frame
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
+
+                    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+                    {
+                        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("sim") });
+                        cpass.set_bind_group(0, &compute_bg, &[]);
+
+                        cpass.set_pipeline(&add_src_pipe);
+                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+
+                        cpass.set_pipeline(&advect_vec_pipe);
+                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+
+                        cpass.set_pipeline(&advect_scalar_pipe);
+                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+
+                        cpass.set_pipeline(&diffuse_vec_pipe);
+                        for _ in 0..20 {
+                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+                        }
+
+                        cpass.set_pipeline(&divergence_pipe);
+                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+
+                        cpass.set_pipeline(&pressure_pipe);
+                        for _ in 0..sim_params.jacobi_iterations {
+                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+                        }
+
+                        cpass.set_pipeline(&gradient_pipe);
+                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+                    }
+
+                    {
+                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("render"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                    store: true,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                        rpass.set_pipeline(&render_pipeline);
+                        rpass.set_bind_group(0, &render_bg, &[]);
+                        rpass.draw(0..3, 0..1);
+                    }
+
+                    queue.submit(Some(encoder.finish()));
+                    frame.present();
+                    sim_params.mouse_delta = [0.0, 0.0];
+                }
+                _ => {}
+            }
+        })
+        .unwrap();
 }
