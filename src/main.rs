@@ -147,8 +147,8 @@ fn main() {
                 },
                 count: None,
             },
-            |i| wgpu::BindGroupLayoutEntry {
-                binding: i,
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::StorageTexture {
                     access: wgpu::StorageTextureAccess::ReadWrite,
@@ -157,8 +157,8 @@ fn main() {
                 },
                 count: None,
             },
-            |i| wgpu::BindGroupLayoutEntry {
-                binding: i,
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::StorageTexture {
                     access: wgpu::StorageTextureAccess::ReadWrite,
@@ -167,8 +167,8 @@ fn main() {
                 },
                 count: None,
             },
-            |i| wgpu::BindGroupLayoutEntry {
-                binding: i,
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::StorageTexture {
                     access: wgpu::StorageTextureAccess::ReadWrite,
@@ -177,8 +177,8 @@ fn main() {
                 },
                 count: None,
             },
-            |i| wgpu::BindGroupLayoutEntry {
-                binding: i,
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::StorageTexture {
                     access: wgpu::StorageTextureAccess::ReadWrite,
@@ -187,8 +187,8 @@ fn main() {
                 },
                 count: None,
             },
-            |i| wgpu::BindGroupLayoutEntry {
-                binding: i,
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::StorageTexture {
                     access: wgpu::StorageTextureAccess::ReadWrite,
@@ -197,8 +197,8 @@ fn main() {
                 },
                 count: None,
             },
-            |i| wgpu::BindGroupLayoutEntry {
-                binding: i,
+            wgpu::BindGroupLayoutEntry {
+                binding: 6,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::StorageTexture {
                     access: wgpu::StorageTextureAccess::ReadWrite,
@@ -207,8 +207,8 @@ fn main() {
                 },
                 count: None,
             },
-            |i| wgpu::BindGroupLayoutEntry {
-                binding: i,
+            wgpu::BindGroupLayoutEntry {
+                binding: 7,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::StorageTexture {
                     access: wgpu::StorageTextureAccess::ReadWrite,
@@ -217,12 +217,7 @@ fn main() {
                 },
                 count: None,
             },
-        ]
-        .iter()
-        .enumerate()
-        .map(|(i, f)| if i == 0 { f.clone() } else { f(i as u32) })
-        .collect::<Vec<_>>()
-        .as_slice(),
+        ],
     });
 
     let render_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -386,77 +381,81 @@ fn main() {
                         sim_params.mouse_pos = [current.0, current.1];
                         last_mouse = Some(current);
                     }
+                    WindowEvent::RedrawRequested => {
+                        queue.write_buffer(&param_buffer, 0, bytemuck::bytes_of(&sim_params));
+
+                        let frame = match surface.get_current_texture() {
+                            Ok(f) => f,
+                            Err(_) => {
+                                surface.configure(&device, &config);
+                                return;
+                            }
+                        };
+                        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+                        {
+                            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                                label: Some("sim"),
+                                timestamp_writes: None,
+                            });
+                            cpass.set_bind_group(0, &compute_bg, &[]);
+
+                            cpass.set_pipeline(&add_src_pipe);
+                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+
+                            cpass.set_pipeline(&advect_vec_pipe);
+                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+
+                            cpass.set_pipeline(&advect_scalar_pipe);
+                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+
+                            cpass.set_pipeline(&diffuse_vec_pipe);
+                            for _ in 0..20 {
+                                cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+                            }
+
+                            cpass.set_pipeline(&divergence_pipe);
+                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+
+                            cpass.set_pipeline(&pressure_pipe);
+                            for _ in 0..sim_params.jacobi_iterations {
+                                cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+                            }
+
+                            cpass.set_pipeline(&gradient_pipe);
+                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+                        }
+
+                        {
+                            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("render"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                            rpass.set_pipeline(&render_pipeline);
+                            rpass.set_bind_group(0, &render_bg, &[]);
+                            rpass.draw(0..3, 0..1);
+                        }
+
+                        queue.submit(Some(encoder.finish()));
+                        frame.present();
+                        sim_params.mouse_delta = [0.0, 0.0];
+                    }
                     _ => {}
                 },
-                Event::MainEventsCleared => {
-                    queue.write_buffer(&param_buffer, 0, bytemuck::bytes_of(&sim_params));
-
-                    let frame = match surface.get_current_texture() {
-                        Ok(f) => f,
-                        Err(_) => {
-                            surface.configure(&device, &config);
-                            return;
-                        }
-                    };
-                    let view = frame
-                        .texture
-                        .create_view(&wgpu::TextureViewDescriptor::default());
-
-                    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-
-                    {
-                        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("sim") });
-                        cpass.set_bind_group(0, &compute_bg, &[]);
-
-                        cpass.set_pipeline(&add_src_pipe);
-                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-
-                        cpass.set_pipeline(&advect_vec_pipe);
-                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-
-                        cpass.set_pipeline(&advect_scalar_pipe);
-                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-
-                        cpass.set_pipeline(&diffuse_vec_pipe);
-                        for _ in 0..20 {
-                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-                        }
-
-                        cpass.set_pipeline(&divergence_pipe);
-                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-
-                        cpass.set_pipeline(&pressure_pipe);
-                        for _ in 0..sim_params.jacobi_iterations {
-                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-                        }
-
-                        cpass.set_pipeline(&gradient_pipe);
-                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-                    }
-
-                    {
-                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("render"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &view,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                    store: true,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                        });
-                        rpass.set_pipeline(&render_pipeline);
-                        rpass.set_bind_group(0, &render_bg, &[]);
-                        rpass.draw(0..3, 0..1);
-                    }
-
-                    queue.submit(Some(encoder.finish()));
-                    frame.present();
-                    sim_params.mouse_delta = [0.0, 0.0];
+                Event::AboutToWait => {
+                    window.request_redraw();
                 }
                 _ => {}
             }
