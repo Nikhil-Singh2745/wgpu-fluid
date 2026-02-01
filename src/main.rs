@@ -1,9 +1,9 @@
 use std::mem;
-use wgpu::util::DeviceExt;
+use wgpu::util::{DeviceExt, BufferInitDescriptor};
 use winit::{
     dpi::LogicalSize,
     event::*,
-    event_loop::{ControlFlow, EventLoop},
+    event_loop::EventLoop,
     window::WindowBuilder,
 };
 
