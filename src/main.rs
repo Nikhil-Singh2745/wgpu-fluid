@@ -128,7 +128,7 @@ fn main() {
         radius: 8.0,
         _pad1: [0.0; 3],
     };
-    let param_buffer = device.create_buffer_init(&wgpu::BufferInitDescriptor {
+    let param_buffer = device.create_buffer_init(&BufferInitDescriptor {
         label: Some("params"),
         contents: bytemuck::bytes_of(&params),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
