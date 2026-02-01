@@ -10,7 +10,9 @@ struct SimParams {
     mouse_pos: vec2<f32>,
     mouse_delta: vec2<f32>,
     radius: f32,
-    _pad1: vec3<f32>,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: SimParams;
@@ -120,8 +122,8 @@ fn subtract_gradient(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(velocity, p, vec4<f32>(vel - grad, 0.0, 0.0));
 }
 
-@group(1) @binding(0) var density_tex: texture_2d<f32>;
-@group(1) @binding(1) var density_sampler: sampler;
+@group(0) @binding(0) var density_tex: texture_2d<f32>;
+@group(0) @binding(1) var density_sampler: sampler;
 
 struct VSOut {
     @builtin(position) pos: vec4<f32>,
