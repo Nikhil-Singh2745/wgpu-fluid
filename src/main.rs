@@ -1,5 +1,4 @@
-// use std::mem;
-use wgpu::util::{DeviceExt, BufferInitDescriptor};
+use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use winit::{
     dpi::LogicalSize,
     event::*,
@@ -12,8 +11,6 @@ use winit::{
 struct SimParams {
     grid_size: u32,
     mouse_down: u32,
-    jacobi_iterations: u32,
-    _pad0: u32,
     dt: f32,
     viscosity: f32,
     dissipation: f32,
@@ -21,7 +18,7 @@ struct SimParams {
     mouse_pos: [f32; 2],
     mouse_delta: [f32; 2],
     radius: f32,
-    _pad1: [f32; 3],
+    _pad: [f32; 3],
 }
 
 fn create_storage_tex(device: &wgpu::Device, size: u32) -> (wgpu::Texture, wgpu::TextureView) {
@@ -47,97 +44,96 @@ fn create_storage_tex(device: &wgpu::Device, size: u32) -> (wgpu::Texture, wgpu:
 }
 
 fn main() {
+    env_logger::init();
+    
     let event_loop = EventLoop::new().unwrap();
     let window = WindowBuilder::new()
-        .with_title("WGPU Fluid")
+        .with_title("WGPU Fluid Simulation")
         .with_inner_size(LogicalSize::new(800.0, 800.0))
         .build(&event_loop)
         .unwrap();
 
-    let instance = wgpu::Instance::default();
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::all(),
+        ..Default::default()
+    });
+    
     let surface = instance.create_surface(&window).unwrap();
+    
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         force_fallback_adapter: false,
         compatible_surface: Some(&surface),
     }))
-    .expect("No adapter");
-    let mut limits = adapter.limits();
-    limits.max_storage_textures_per_shader_stage = 8;
+    .expect("Failed to find adapter");
 
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
             label: None,
-            required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
-            required_limits: limits,
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
         },
         None,
     ))
-    .unwrap();
+    .expect("Failed to create device");
 
     let surface_caps = surface.get_capabilities(&adapter);
-    let surface_format = surface_caps.formats[0];
+    let surface_format = surface_caps
+        .formats
+        .iter()
+        .find(|f| f.is_srgb())
+        .copied()
+        .unwrap_or(surface_caps.formats[0]);
+
     let size = window.inner_size();
     let mut config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: surface_format,
         width: size.width.max(1),
         height: size.height.max(1),
-        present_mode: wgpu::PresentMode::Fifo,
+        present_mode: wgpu::PresentMode::AutoVsync,
         alpha_mode: surface_caps.alpha_modes[0],
-        view_formats: vec![surface_format],
+        view_formats: vec![],
         desired_maximum_frame_latency: 2,
     };
     surface.configure(&device, &config);
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("fluid"),
+        label: Some("fluid_shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("../fluid.wgsl").into()),
     });
 
-    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("density_sampler"),
-        address_mode_u: wgpu::AddressMode::ClampToEdge,
-        address_mode_v: wgpu::AddressMode::ClampToEdge,
-        address_mode_w: wgpu::AddressMode::ClampToEdge,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::FilterMode::Nearest,
-        ..Default::default()
-    });
-
     let grid_size: u32 = 256;
-    let workgroup = ((grid_size + 7) / 8, (grid_size + 7) / 8);
+    let workgroups = ((grid_size + 7) / 8, (grid_size + 7) / 8);
 
-    let (_vel_a, vel_a_view) = create_storage_tex(&device, grid_size);
-    let (_vel_b, vel_b_view) = create_storage_tex(&device, grid_size);
-    let (_dens_a, dens_a_view) = create_storage_tex(&device, grid_size);
-    let (_dens_b, dens_b_view) = create_storage_tex(&device, grid_size);
-    let (_press_a, press_a_view) = create_storage_tex(&device, grid_size);
-    let (_press_b, press_b_view) = create_storage_tex(&device, grid_size);
+    let (_vel, vel_view) = create_storage_tex(&device, grid_size);
+    let (_vel_tmp, vel_tmp_view) = create_storage_tex(&device, grid_size);
+    let (_dens, dens_view) = create_storage_tex(&device, grid_size);
+    let (_dens_tmp, dens_tmp_view) = create_storage_tex(&device, grid_size);
+    let (_press, press_view) = create_storage_tex(&device, grid_size);
+    let (_press_tmp, press_tmp_view) = create_storage_tex(&device, grid_size);
     let (_div, div_view) = create_storage_tex(&device, grid_size);
 
     let params = SimParams {
         grid_size,
         mouse_down: 0,
-        jacobi_iterations: 40,
-        _pad0: 0,
-        dt: 0.1,
-        viscosity: 0.0005,
-        dissipation: 0.999,
-        add_strength: 30.0,
+        dt: 0.016,
+        viscosity: 0.0001,
+        dissipation: 0.995,
+        add_strength: 1.0,
         mouse_pos: [128.0, 128.0],
         mouse_delta: [0.0, 0.0],
-        radius: 8.0,
-        _pad1: [0.0; 3],
+        radius: 20.0,
+        _pad: [0.0; 3],
     };
+
     let param_buffer = device.create_buffer_init(&BufferInitDescriptor {
         label: Some("params"),
         contents: bytemuck::bytes_of(&params),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
 
-    let compute_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+    let compute_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("compute_bgl"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
@@ -223,7 +219,46 @@ fn main() {
         ],
     });
 
-    let render_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+    let compute_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("compute_bg"),
+        layout: &compute_bgl,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: param_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&vel_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&vel_tmp_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&dens_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&dens_tmp_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(&press_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(&press_tmp_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::TextureView(&div_view),
+            },
+        ],
+    });
+
+    let render_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("render_bgl"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
@@ -245,52 +280,22 @@ fn main() {
         ],
     });
 
-    let compute_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("compute_bg"),
-        layout: &compute_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: param_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(&vel_a_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::TextureView(&vel_b_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: wgpu::BindingResource::TextureView(&dens_a_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: wgpu::BindingResource::TextureView(&dens_b_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 5,
-                resource: wgpu::BindingResource::TextureView(&press_a_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 6,
-                resource: wgpu::BindingResource::TextureView(&press_b_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 7,
-                resource: wgpu::BindingResource::TextureView(&div_view),
-            },
-        ],
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("render_sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
     });
 
     let render_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("render_bg"),
-        layout: &render_layout,
+        layout: &render_bgl,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::TextureView(&dens_a_view),
+                resource: wgpu::BindingResource::TextureView(&dens_view),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
@@ -299,39 +304,40 @@ fn main() {
         ],
     });
 
-    let compute_pipeline_layout =
-        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("compute_pl"),
-            bind_group_layouts: &[&compute_layout],
-            push_constant_ranges: &[],
-        });
+    let compute_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("compute_pl"),
+        bind_group_layouts: &[&compute_bgl],
+        push_constant_ranges: &[],
+    });
 
-    let render_pipeline_layout =
-        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("render_pl"),
-            bind_group_layouts: &[&render_layout],
-            push_constant_ranges: &[],
-        });
+    let render_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("render_pl"),
+        bind_group_layouts: &[&render_bgl],
+        push_constant_ranges: &[],
+    });
 
-    let mk_compute = |name: &str| {
+    let make_compute = |entry: &str| {
         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(name),
-            layout: Some(&compute_pipeline_layout),
+            label: Some(entry),
+            layout: Some(&compute_pl),
             module: &shader,
-            entry_point: name,
+            entry_point: entry,
         })
     };
-    let add_src_pipe = mk_compute("add_source");
-    let advect_vec_pipe = mk_compute("advect_vec");
-    let advect_scalar_pipe = mk_compute("advect_scalar");
-    let diffuse_vec_pipe = mk_compute("diffuse_vec");
-    let divergence_pipe = mk_compute("compute_divergence");
-    let pressure_pipe = mk_compute("pressure_jacobi");
-    let gradient_pipe = mk_compute("subtract_gradient");
+
+    let add_source_pipe = make_compute("add_source");
+    let advect_vel_pipe = make_compute("advect_vel");
+    let copy_vel_pipe = make_compute("copy_vel");
+    let advect_dens_pipe = make_compute("advect_dens");
+    let copy_dens_pipe = make_compute("copy_dens");
+    let divergence_pipe = make_compute("compute_divergence");
+    let pressure_a_pipe = make_compute("pressure_jacobi_a");
+    let pressure_b_pipe = make_compute("pressure_jacobi_b");
+    let gradient_pipe = make_compute("subtract_gradient");
 
     let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("render"),
-        layout: Some(&render_pipeline_layout),
+        label: Some("render_pipeline"),
+        layout: Some(&render_pl),
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: "vs_fullscreen",
@@ -353,7 +359,8 @@ fn main() {
     });
 
     let mut sim_params = params;
-    let mut last_mouse = None::<(f32, f32)>;
+    let mut last_mouse: Option<(f32, f32)> = None;
+    let mut window_size = window.inner_size();
 
     event_loop
         .run(move |event, target| {
@@ -364,10 +371,15 @@ fn main() {
                         if new_size.width > 0 && new_size.height > 0 {
                             config.width = new_size.width;
                             config.height = new_size.height;
+                            window_size = new_size;
                             surface.configure(&device, &config);
                         }
                     }
-                    WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
+                    WindowEvent::MouseInput {
+                        state,
+                        button: MouseButton::Left,
+                        ..
+                    } => {
                         sim_params.mouse_down = if state == ElementState::Pressed { 1 } else { 0 };
                         if state == ElementState::Released {
                             last_mouse = None;
@@ -375,14 +387,17 @@ fn main() {
                         }
                     }
                     WindowEvent::CursorMoved { position, .. } => {
-                        let px = position.x as f32;
-                        let py = position.y as f32;
-                        let current = (px / 3.0, py / 3.0);
-                        if let Some(prev) = last_mouse {
-                            sim_params.mouse_delta = [current.0 - prev.0, current.1 - prev.1];
+                        let scale_x = grid_size as f32 / window_size.width as f32;
+                        let scale_y = grid_size as f32 / window_size.height as f32;
+                        
+                        let mx = position.x as f32 * scale_x;
+                        let my = position.y as f32 * scale_y;
+                        
+                        if let Some((px, py)) = last_mouse {
+                            sim_params.mouse_delta = [mx - px, my - py];
                         }
-                        sim_params.mouse_pos = [current.0, current.1];
-                        last_mouse = Some(current);
+                        sim_params.mouse_pos = [mx, my];
+                        last_mouse = Some((mx, my));
                     }
                     _ => {}
                 },
@@ -391,46 +406,51 @@ fn main() {
 
                     let frame = match surface.get_current_texture() {
                         Ok(f) => f,
-                        Err(_) => {
+                        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                             surface.configure(&device, &config);
                             return;
                         }
+                        Err(e) => {
+                            eprintln!("Surface error: {:?}", e);
+                            return;
+                        }
                     };
-                    let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-                    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+                    
+                    let view = frame.texture.create_view(&Default::default());
+                    let mut encoder = device.create_command_encoder(&Default::default());
 
                     {
                         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                            label: Some("sim"),
+                            label: Some("fluid_sim"),
                             timestamp_writes: None,
                         });
                         cpass.set_bind_group(0, &compute_bg, &[]);
 
-                        cpass.set_pipeline(&add_src_pipe);
-                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+                        cpass.set_pipeline(&add_source_pipe);
+                        cpass.dispatch_workgroups(workgroups.0, workgroups.1, 1);
 
-                        cpass.set_pipeline(&advect_vec_pipe);
-                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+                        cpass.set_pipeline(&advect_vel_pipe);
+                        cpass.dispatch_workgroups(workgroups.0, workgroups.1, 1);
+                        cpass.set_pipeline(&copy_vel_pipe);
+                        cpass.dispatch_workgroups(workgroups.0, workgroups.1, 1);
 
-                        cpass.set_pipeline(&advect_scalar_pipe);
-                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-
-                        cpass.set_pipeline(&diffuse_vec_pipe);
-                        for _ in 0..20 {
-                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-                        }
+                        cpass.set_pipeline(&advect_dens_pipe);
+                        cpass.dispatch_workgroups(workgroups.0, workgroups.1, 1);
+                        cpass.set_pipeline(&copy_dens_pipe);
+                        cpass.dispatch_workgroups(workgroups.0, workgroups.1, 1);
 
                         cpass.set_pipeline(&divergence_pipe);
-                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+                        cpass.dispatch_workgroups(workgroups.0, workgroups.1, 1);
 
-                        cpass.set_pipeline(&pressure_pipe);
-                        for _ in 0..sim_params.jacobi_iterations {
-                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+                        for _ in 0..20 {
+                            cpass.set_pipeline(&pressure_a_pipe);
+                            cpass.dispatch_workgroups(workgroups.0, workgroups.1, 1);
+                            cpass.set_pipeline(&pressure_b_pipe);
+                            cpass.dispatch_workgroups(workgroups.0, workgroups.1, 1);
                         }
 
                         cpass.set_pipeline(&gradient_pipe);
-                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+                        cpass.dispatch_workgroups(workgroups.0, workgroups.1, 1);
                     }
 
                     {
@@ -455,10 +475,12 @@ fn main() {
 
                     queue.submit(Some(encoder.finish()));
                     frame.present();
+                    
+                    // Reset delta after frame
                     sim_params.mouse_delta = [0.0, 0.0];
                 }
                 _ => {}
             }
         })
         .unwrap();
-}
+    }    
