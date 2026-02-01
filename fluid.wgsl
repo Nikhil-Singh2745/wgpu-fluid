@@ -36,10 +36,10 @@ fn add_source(@builtin(global_invocation_id) gid: vec3<u32>) {
     let falloff = exp(- (d * d) / (params.radius * params.radius + 0.0001));
     let add_dye = params.add_strength * falloff;
     let add_vel = params.mouse_delta * falloff;
-    let v = textureLoad(velocity, vec2<i32>(gid.xy), 0).xy;
-    textureStore(velocity, vec2<i32>(gid.xy), 0, vec4<f32>(v + add_vel, 0.0, 0.0));
-    let c = textureLoad(density, vec2<i32>(gid.xy), 0);
-    textureStore(density, vec2<i32>(gid.xy), 0, vec4<f32>(c.x + add_dye, 0.0, 0.0, 0.0));
+    let v = textureLoad(velocity, vec2<i32>(gid.xy)).xy;
+    textureStore(velocity, vec2<i32>(gid.xy), vec4<f32>(v + add_vel, 0.0, 0.0));
+    let c = textureLoad(density, vec2<i32>(gid.xy));
+    textureStore(density, vec2<i32>(gid.xy), vec4<f32>(c.x + add_dye, 0.0, 0.0, 0.0));
 }
 
 @compute @workgroup_size(8, 8)
@@ -47,11 +47,11 @@ fn advect_vec(@builtin(global_invocation_id) gid: vec3<u32>) {
     let size = f32(params.grid_size);
     if (gid.x >= params.grid_size || gid.y >= params.grid_size) { return; }
     let coord = vec2<f32>(f32(gid.x), f32(gid.y));
-    let vel = textureLoad(velocity, vec2<i32>(gid.xy), 0).xy;
+    let vel = textureLoad(velocity, vec2<i32>(gid.xy)).xy;
     let prev = coord - vel * params.dt;
     let p = clamp_coord(prev, size);
-    let sampled = textureLoad(velocity, p, 0).xy * params.dissipation;
-    textureStore(velocity_tmp, vec2<i32>(gid.xy), 0, vec4<f32>(sampled, 0.0, 0.0));
+    let sampled = textureLoad(velocity, p).xy * params.dissipation;
+    textureStore(velocity_tmp, vec2<i32>(gid.xy), vec4<f32>(sampled, 0.0, 0.0));
 }
 
 @compute @workgroup_size(8, 8)
@@ -59,11 +59,11 @@ fn advect_scalar(@builtin(global_invocation_id) gid: vec3<u32>) {
     let size = f32(params.grid_size);
     if (gid.x >= params.grid_size || gid.y >= params.grid_size) { return; }
     let coord = vec2<f32>(f32(gid.x), f32(gid.y));
-    let vel = textureLoad(velocity, vec2<i32>(gid.xy), 0).xy;
+    let vel = textureLoad(velocity, vec2<i32>(gid.xy)).xy;
     let prev = coord - vel * params.dt;
     let p = clamp_coord(prev, size);
-    let sampled = textureLoad(density, p, 0).x * params.dissipation;
-    textureStore(density_tmp, vec2<i32>(gid.xy), 0, vec4<f32>(sampled, 0.0, 0.0, 0.0));
+    let sampled = textureLoad(density, p).x * params.dissipation;
+    textureStore(density_tmp, vec2<i32>(gid.xy), vec4<f32>(sampled, 0.0, 0.0, 0.0));
 }
 
 @compute @workgroup_size(8, 8)
@@ -72,52 +72,52 @@ fn diffuse_vec(@builtin(global_invocation_id) gid: vec3<u32>) {
     let alpha = params.viscosity * params.dt * f32(params.grid_size * params.grid_size);
     let beta = 1.0 + 4.0 * alpha;
     let p = vec2<i32>(gid.xy);
-    let center = textureLoad(velocity_tmp, p, 0).xy;
-    let l = textureLoad(velocity_tmp, p + vec2<i32>(-1, 0), 0).xy;
-    let r = textureLoad(velocity_tmp, p + vec2<i32>(1, 0), 0).xy;
-    let b = textureLoad(velocity_tmp, p + vec2<i32>(0, -1), 0).xy;
-    let t = textureLoad(velocity_tmp, p + vec2<i32>(0, 1), 0).xy;
+    let center = textureLoad(velocity_tmp, p).xy;
+    let l = textureLoad(velocity_tmp, p + vec2<i32>(-1, 0)).xy;
+    let r = textureLoad(velocity_tmp, p + vec2<i32>(1, 0)).xy;
+    let b = textureLoad(velocity_tmp, p + vec2<i32>(0, -1)).xy;
+    let t = textureLoad(velocity_tmp, p + vec2<i32>(0, 1)).xy;
     let out_v = (center + alpha * (l + r + b + t)) / beta;
-    textureStore(velocity, p, 0, vec4<f32>(out_v, 0.0, 0.0));
+    textureStore(velocity, p, vec4<f32>(out_v, 0.0, 0.0));
 }
 
 @compute @workgroup_size(8, 8)
 fn compute_divergence(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= params.grid_size || gid.y >= params.grid_size) { return; }
     let p = vec2<i32>(gid.xy);
-    let l = textureLoad(velocity, p + vec2<i32>(-1, 0), 0).xy;
-    let r = textureLoad(velocity, p + vec2<i32>(1, 0), 0).xy;
-    let b = textureLoad(velocity, p + vec2<i32>(0, -1), 0).xy;
-    let t = textureLoad(velocity, p + vec2<i32>(0, 1), 0).xy;
+    let l = textureLoad(velocity, p + vec2<i32>(-1, 0)).xy;
+    let r = textureLoad(velocity, p + vec2<i32>(1, 0)).xy;
+    let b = textureLoad(velocity, p + vec2<i32>(0, -1)).xy;
+    let t = textureLoad(velocity, p + vec2<i32>(0, 1)).xy;
     let h = 1.0;
     let div = 0.5 * ((r.x - l.x) / h + (t.y - b.y) / h);
-    textureStore(divergence, p, 0, vec4<f32>(div, 0.0, 0.0, 0.0));
+    textureStore(divergence, p, vec4<f32>(div, 0.0, 0.0, 0.0));
 }
 
 @compute @workgroup_size(8, 8)
 fn pressure_jacobi(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= params.grid_size || gid.y >= params.grid_size) { return; }
     let p = vec2<i32>(gid.xy);
-    let l = textureLoad(pressure, p + vec2<i32>(-1, 0), 0).x;
-    let r = textureLoad(pressure, p + vec2<i32>(1, 0), 0).x;
-    let b = textureLoad(pressure, p + vec2<i32>(0, -1), 0).x;
-    let t = textureLoad(pressure, p + vec2<i32>(0, 1), 0).x;
-    let div = textureLoad(divergence, p, 0).x;
+    let l = textureLoad(pressure, p + vec2<i32>(-1, 0)).x;
+    let r = textureLoad(pressure, p + vec2<i32>(1, 0)).x;
+    let b = textureLoad(pressure, p + vec2<i32>(0, -1)).x;
+    let t = textureLoad(pressure, p + vec2<i32>(0, 1)).x;
+    let div = textureLoad(divergence, p).x;
     let out_p = (l + r + b + t - div) * 0.25;
-    textureStore(pressure_tmp, p, 0, vec4<f32>(out_p, 0.0, 0.0, 0.0));
+    textureStore(pressure_tmp, p, vec4<f32>(out_p, 0.0, 0.0, 0.0));
 }
 
 @compute @workgroup_size(8, 8)
 fn subtract_gradient(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= params.grid_size || gid.y >= params.grid_size) { return; }
     let p = vec2<i32>(gid.xy);
-    let l = textureLoad(pressure, p + vec2<i32>(-1, 0), 0).x;
-    let r = textureLoad(pressure, p + vec2<i32>(1, 0), 0).x;
-    let b = textureLoad(pressure, p + vec2<i32>(0, -1), 0).x;
-    let t = textureLoad(pressure, p + vec2<i32>(0, 1), 0).x;
-    let vel = textureLoad(velocity, p, 0).xy;
+    let l = textureLoad(pressure, p + vec2<i32>(-1, 0)).x;
+    let r = textureLoad(pressure, p + vec2<i32>(1, 0)).x;
+    let b = textureLoad(pressure, p + vec2<i32>(0, -1)).x;
+    let t = textureLoad(pressure, p + vec2<i32>(0, 1)).x;
+    let vel = textureLoad(velocity, p).xy;
     let grad = vec2<f32>(r - l, t - b) * 0.5;
-    textureStore(velocity, p, 0, vec4<f32>(vel - grad, 0.0, 0.0));
+    textureStore(velocity, p, vec4<f32>(vel - grad, 0.0, 0.0));
 }
 
 @group(1) @binding(0) var density_tex: texture_2d<f32>;

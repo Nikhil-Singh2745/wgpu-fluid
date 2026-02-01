@@ -62,11 +62,14 @@ fn main() {
         compatible_surface: Some(&surface),
     }))
     .expect("No adapter");
+    let mut limits = adapter.limits();
+    limits.max_storage_textures_per_shader_stage = 8;
+
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
             label: None,
             required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
-            required_limits: wgpu::Limits::default(),
+            required_limits: limits,
         },
         None,
     ))
@@ -106,12 +109,12 @@ fn main() {
     let grid_size: u32 = 256;
     let workgroup = ((grid_size + 7) / 8, (grid_size + 7) / 8);
 
-    let (vel_a, vel_a_view) = create_storage_tex(&device, grid_size);
-    let (vel_b, vel_b_view) = create_storage_tex(&device, grid_size);
-    let (dens_a, dens_a_view) = create_storage_tex(&device, grid_size);
-    let (dens_b, dens_b_view) = create_storage_tex(&device, grid_size);
-    let (press_a, press_a_view) = create_storage_tex(&device, grid_size);
-    let (press_b, press_b_view) = create_storage_tex(&device, grid_size);
+    let (_vel_a, vel_a_view) = create_storage_tex(&device, grid_size);
+    let (_vel_b, vel_b_view) = create_storage_tex(&device, grid_size);
+    let (_dens_a, dens_a_view) = create_storage_tex(&device, grid_size);
+    let (_dens_b, dens_b_view) = create_storage_tex(&device, grid_size);
+    let (_press_a, press_a_view) = create_storage_tex(&device, grid_size);
+    let (_press_b, press_b_view) = create_storage_tex(&device, grid_size);
     let (_div, div_view) = create_storage_tex(&device, grid_size);
 
     let params = SimParams {
@@ -143,7 +146,7 @@ fn main() {
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(mem::size_of::<SimParams>() as _),
+                    min_binding_size: None,
                 },
                 count: None,
             },
@@ -381,81 +384,78 @@ fn main() {
                         sim_params.mouse_pos = [current.0, current.1];
                         last_mouse = Some(current);
                     }
-                    WindowEvent::RedrawRequested => {
-                        queue.write_buffer(&param_buffer, 0, bytemuck::bytes_of(&sim_params));
-
-                        let frame = match surface.get_current_texture() {
-                            Ok(f) => f,
-                            Err(_) => {
-                                surface.configure(&device, &config);
-                                return;
-                            }
-                        };
-                        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-                        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-
-                        {
-                            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                                label: Some("sim"),
-                                timestamp_writes: None,
-                            });
-                            cpass.set_bind_group(0, &compute_bg, &[]);
-
-                            cpass.set_pipeline(&add_src_pipe);
-                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-
-                            cpass.set_pipeline(&advect_vec_pipe);
-                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-
-                            cpass.set_pipeline(&advect_scalar_pipe);
-                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-
-                            cpass.set_pipeline(&diffuse_vec_pipe);
-                            for _ in 0..20 {
-                                cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-                            }
-
-                            cpass.set_pipeline(&divergence_pipe);
-                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-
-                            cpass.set_pipeline(&pressure_pipe);
-                            for _ in 0..sim_params.jacobi_iterations {
-                                cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-                            }
-
-                            cpass.set_pipeline(&gradient_pipe);
-                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
-                        }
-
-                        {
-                            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("render"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: &view,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                })],
-                                depth_stencil_attachment: None,
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
-                            });
-                            rpass.set_pipeline(&render_pipeline);
-                            rpass.set_bind_group(0, &render_bg, &[]);
-                            rpass.draw(0..3, 0..1);
-                        }
-
-                        queue.submit(Some(encoder.finish()));
-                        frame.present();
-                        sim_params.mouse_delta = [0.0, 0.0];
-                    }
                     _ => {}
                 },
                 Event::AboutToWait => {
-                    window.request_redraw();
+                    queue.write_buffer(&param_buffer, 0, bytemuck::bytes_of(&sim_params));
+
+                    let frame = match surface.get_current_texture() {
+                        Ok(f) => f,
+                        Err(_) => {
+                            surface.configure(&device, &config);
+                            return;
+                        }
+                    };
+                    let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+                    {
+                        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("sim"),
+                            timestamp_writes: None,
+                        });
+                        cpass.set_bind_group(0, &compute_bg, &[]);
+
+                        cpass.set_pipeline(&add_src_pipe);
+                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+
+                        cpass.set_pipeline(&advect_vec_pipe);
+                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+
+                        cpass.set_pipeline(&advect_scalar_pipe);
+                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+
+                        cpass.set_pipeline(&diffuse_vec_pipe);
+                        for _ in 0..20 {
+                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+                        }
+
+                        cpass.set_pipeline(&divergence_pipe);
+                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+
+                        cpass.set_pipeline(&pressure_pipe);
+                        for _ in 0..sim_params.jacobi_iterations {
+                            cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+                        }
+
+                        cpass.set_pipeline(&gradient_pipe);
+                        cpass.dispatch_workgroups(workgroup.0, workgroup.1, 1);
+                    }
+
+                    {
+                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("render"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                        rpass.set_pipeline(&render_pipeline);
+                        rpass.set_bind_group(0, &render_bg, &[]);
+                        rpass.draw(0..3, 0..1);
+                    }
+
+                    queue.submit(Some(encoder.finish()));
+                    frame.present();
+                    sim_params.mouse_delta = [0.0, 0.0];
                 }
                 _ => {}
             }
