@@ -1,3 +1,6 @@
+// ============================================================
+// Simulation uniform params — shared by all compute kernels
+// ============================================================
 struct SimParams {
     grid_size: u32,
     mouse_down: u32,
@@ -11,6 +14,9 @@ struct SimParams {
     _pad: vec3<f32>,
 }
 
+// ============================================================
+// Compute bindings — group 0
+// ============================================================
 @group(0) @binding(0) var<uniform> params: SimParams;
 @group(0) @binding(1) var velocity: texture_storage_2d<rgba16float, read_write>;
 @group(0) @binding(2) var velocity_tmp: texture_storage_2d<rgba16float, read_write>;
@@ -20,6 +26,15 @@ struct SimParams {
 @group(0) @binding(6) var pressure_tmp: texture_storage_2d<rgba16float, read_write>;
 @group(0) @binding(7) var divergence_tex: texture_storage_2d<rgba16float, read_write>;
 
+// ============================================================
+// Render bindings — group 1 (used only by vertex/fragment)
+// ============================================================
+@group(1) @binding(0) var render_density_tex: texture_2d<f32>;
+@group(1) @binding(1) var render_sampler: sampler;
+
+// ============================================================
+// Helpers
+// ============================================================
 fn in_bounds(gid: vec3<u32>) -> bool {
     return gid.x < params.grid_size && gid.y < params.grid_size;
 }
@@ -60,48 +75,54 @@ fn safe_load_div(p: vec2<i32>) -> f32 {
     return textureLoad(divergence_tex, cp).x;
 }
 
+// ============================================================
+// Compute: add mouse forces + dye
+// ============================================================
 @compute @workgroup_size(8, 8)
 fn add_source(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (!in_bounds(gid)) { return; }
     if (params.mouse_down == 0u) { return; }
-    
+
     let pos = vec2<f32>(f32(gid.x), f32(gid.y));
     let d = distance(pos, params.mouse_pos);
     let falloff = exp(-(d * d) / (params.radius * params.radius + 0.001));
-    
+
     let p = vec2<i32>(gid.xy);
     let v = textureLoad(velocity, p).xy;
     let add_vel = params.mouse_delta * falloff * 50.0;
     textureStore(velocity, p, vec4<f32>(v + add_vel, 0.0, 0.0));
-    
+
     let c = textureLoad(density, p).x;
     let add_dye = params.add_strength * falloff;
     textureStore(density, p, vec4<f32>(c + add_dye, 0.0, 0.0, 0.0));
 }
 
+// ============================================================
+// Compute: advect velocity
+// ============================================================
 @compute @workgroup_size(8, 8)
 fn advect_vel(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (!in_bounds(gid)) { return; }
-    
+
     let p = vec2<i32>(gid.xy);
     let pos = vec2<f32>(f32(gid.x) + 0.5, f32(gid.y) + 0.5);
     let vel = textureLoad(velocity, p).xy;
     let prev_pos = pos - vel * params.dt;
-    
+
     let size = f32(params.grid_size);
     let pp = clamp(prev_pos - vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(size - 1.001));
     let i = vec2<i32>(floor(pp));
     let f = fract(pp);
-    
+
     let v00 = safe_load_vel(i);
     let v10 = safe_load_vel(i + vec2<i32>(1, 0));
     let v01 = safe_load_vel(i + vec2<i32>(0, 1));
     let v11 = safe_load_vel(i + vec2<i32>(1, 1));
-    
+
     let v0 = mix(v00, v10, f.x);
     let v1 = mix(v01, v11, f.x);
     let sampled = mix(v0, v1, f.y) * params.dissipation;
-    
+
     textureStore(velocity_tmp, p, vec4<f32>(sampled, 0.0, 0.0));
 }
 
@@ -113,29 +134,32 @@ fn copy_vel(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(velocity, p, vec4<f32>(v, 0.0, 0.0));
 }
 
+// ============================================================
+// Compute: advect density
+// ============================================================
 @compute @workgroup_size(8, 8)
 fn advect_dens(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (!in_bounds(gid)) { return; }
-    
+
     let p = vec2<i32>(gid.xy);
     let pos = vec2<f32>(f32(gid.x) + 0.5, f32(gid.y) + 0.5);
     let vel = textureLoad(velocity, p).xy;
     let prev_pos = pos - vel * params.dt;
-    
+
     let size = f32(params.grid_size);
     let pp = clamp(prev_pos - vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(size - 1.001));
     let i = vec2<i32>(floor(pp));
     let f = fract(pp);
-    
+
     let d00 = safe_load_dens(i);
     let d10 = safe_load_dens(i + vec2<i32>(1, 0));
     let d01 = safe_load_dens(i + vec2<i32>(0, 1));
     let d11 = safe_load_dens(i + vec2<i32>(1, 1));
-    
+
     let d0 = mix(d00, d10, f.x);
     let d1 = mix(d01, d11, f.x);
     let sampled = mix(d0, d1, f.y) * params.dissipation;
-    
+
     textureStore(density_tmp, p, vec4<f32>(sampled, 0.0, 0.0, 0.0));
 }
 
@@ -147,19 +171,22 @@ fn copy_dens(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(density, p, vec4<f32>(d, 0.0, 0.0, 0.0));
 }
 
+// ============================================================
+// Compute: pressure projection
+// ============================================================
 @compute @workgroup_size(8, 8)
 fn compute_divergence(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (!in_bounds(gid)) { return; }
     let p = vec2<i32>(gid.xy);
-    
+
     let vL = safe_load_vel(p + vec2<i32>(-1, 0)).x;
     let vR = safe_load_vel(p + vec2<i32>(1, 0)).x;
     let vB = safe_load_vel(p + vec2<i32>(0, -1)).y;
     let vT = safe_load_vel(p + vec2<i32>(0, 1)).y;
-    
+
     let div = 0.5 * (vR - vL + vT - vB);
     textureStore(divergence_tex, p, vec4<f32>(div, 0.0, 0.0, 0.0));
-    
+
     textureStore(pressure, p, vec4<f32>(0.0));
     textureStore(pressure_tmp, p, vec4<f32>(0.0));
 }
@@ -168,13 +195,13 @@ fn compute_divergence(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn pressure_jacobi_a(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (!in_bounds(gid)) { return; }
     let p = vec2<i32>(gid.xy);
-    
+
     let pL = safe_load_press(p + vec2<i32>(-1, 0));
     let pR = safe_load_press(p + vec2<i32>(1, 0));
     let pB = safe_load_press(p + vec2<i32>(0, -1));
     let pT = safe_load_press(p + vec2<i32>(0, 1));
     let div = safe_load_div(p);
-    
+
     let new_p = (pL + pR + pB + pT - div) * 0.25;
     textureStore(pressure_tmp, p, vec4<f32>(new_p, 0.0, 0.0, 0.0));
 }
@@ -183,13 +210,13 @@ fn pressure_jacobi_a(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn pressure_jacobi_b(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (!in_bounds(gid)) { return; }
     let p = vec2<i32>(gid.xy);
-    
+
     let pL = safe_load_press_tmp(p + vec2<i32>(-1, 0));
     let pR = safe_load_press_tmp(p + vec2<i32>(1, 0));
     let pB = safe_load_press_tmp(p + vec2<i32>(0, -1));
     let pT = safe_load_press_tmp(p + vec2<i32>(0, 1));
     let div = safe_load_div(p);
-    
+
     let new_p = (pL + pR + pB + pT - div) * 0.25;
     textureStore(pressure, p, vec4<f32>(new_p, 0.0, 0.0, 0.0));
 }
@@ -198,20 +225,20 @@ fn pressure_jacobi_b(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn subtract_gradient(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (!in_bounds(gid)) { return; }
     let p = vec2<i32>(gid.xy);
-    
+
     let pL = safe_load_press(p + vec2<i32>(-1, 0));
     let pR = safe_load_press(p + vec2<i32>(1, 0));
     let pB = safe_load_press(p + vec2<i32>(0, -1));
     let pT = safe_load_press(p + vec2<i32>(0, 1));
-    
+
     let grad = vec2<f32>(pR - pL, pT - pB) * 0.5;
     let vel = textureLoad(velocity, p).xy;
     textureStore(velocity, p, vec4<f32>(vel - grad, 0.0, 0.0));
 }
 
-@group(1) @binding(0) var render_density_tex: texture_2d<f32>;
-@group(1) @binding(1) var render_sampler: sampler;
-
+// ============================================================
+// Render: fullscreen triangle
+// ============================================================
 struct VSOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
